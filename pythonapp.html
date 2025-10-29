@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Live Location Tracker</title>
+
+  <!-- Leaflet CSS (CDN) -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-sA+e2k9tQb6+gD4j3zY4s1qk9k0zE1QeU6W+vT0zU8A="
+    crossorigin=""
+  />
+
+  <style>
+    :root{
+      --accent:#0b79d0;
+      --bg:#f6f8fa;
+      --panel:#fff;
+      --muted:#6b7280;
+    }
+    *{box-sizing:border-box}
+    body{
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;
+      margin:0;
+      background:var(--bg);
+      color:#111827;
+      padding:20px;
+      display:flex;
+      flex-direction:column;
+      gap:16px;
+      min-height:100vh;
+    }
+
+    header{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+    }
+    h1{font-size:1.25rem; margin:0;}
+    .controls{
+      display:flex;
+      gap:8px;
+      align-items:center;
+    }
+    button{
+      background:var(--accent);
+      color:white;
+      border:0;
+      padding:8px 12px;
+      border-radius:8px;
+      cursor:pointer;
+      font-weight:600;
+    }
+    button.secondary{
+      background:#e5e7eb; color:#111;
+    }
+    .panel{
+      background:var(--panel);
+      border-radius:12px;
+      padding:12px;
+      box-shadow:0 1px 3px rgba(0,0,0,0.06);
+      display:flex;
+      gap:12px;
+      align-items:flex-start;
+      flex-wrap:wrap;
+    }
+
+    .info{
+      min-width:260px;
+      flex:0 0 320px;
+    }
+    .info p{margin:6px 0; color:var(--muted);}
+    .status{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      margin-bottom:8px;
+    }
+    .dot{width:10px;height:10px;border-radius:50%;}
+    .dot.ok{background:green;}
+    .dot.off{background:#d1d5db;}
+
+    #map{
+      height:420px;
+      flex:1 1 600px;
+      min-width:300px;
+      border-radius:8px;
+      overflow:hidden;
+    }
+
+    label{display:block; font-size:0.85rem; margin-top:6px; color:var(--muted);}
+    input[type="text"], input[type="number"]{
+      width:100%;
+      padding:8px;
+      border-radius:8px;
+      border:1px solid #e5e7eb;
+      margin-top:6px;
+    }
+    .small{font-size:0.9rem; color:var(--muted)}
+    footer{font-size:0.85rem; color:var(--muted);}
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Live Location Tracker</h1>
+    <div class="controls">
+      <button id="startBtn">Start Tracking</button>
+      <button id="stopBtn" class="secondary" disabled>Stop</button>
+    </div>
+  </header>
+
+  <div class="panel">
+    <div class="info">
+      <div class="status">
+        <div id="statusDot" class="dot off"></div>
+        <div>
+          <div id="statusText">Not tracking</div>
+          <div class="small">Make sure the page is served over HTTPS</div>
+        </div>
+      </div>
+
+      <p><strong>Latitude:</strong> <span id="lat">—</span></p>
+      <p><strong>Longitude:</strong> <span id="lng">—</span></p>
+      <p><strong>Accuracy:</strong> <span id="acc">—</span></p>
+      <p><strong>Timestamp:</strong> <span id="ts">—</span></p>
+
+      <label for="userid">Client ID (optional)</label>
+      <input id="userid" type="text" placeholder="e.g. user-123 or device-name">
+
+      <label>
+        <input id="autoSend" type="checkbox"> Auto-send updates to server (`/location`)
+      </label>
+
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button id="sendNow" class="secondary">Send single update</button>
+        <button id="clearMap" class="secondary">Clear marker</button>
+      </div>
+
+      <p class="small" style="margin-top:10px;">
+        Permission required. Location only visible to this page. For production use, serve via HTTPS and implement secure authorization.
+      </p>
+    </div>
+
+    <div id="map" aria-label="map"></div>
+  </div>
+
+  <footer>
+    Tip: Use the browser's "Allow" when prompted. Tracking works on HTTPS or localhost only.
+  </footer>
+
+  <!-- Leaflet JS (CDN) -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-o9N1j8Z2vJ5f6w0Jf4u5V0J2n6Xo2P4f3gycQmV7w+8="
+    crossorigin=""
+  ></script>
+
+  <script>
+    // Basic DOM refs
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const latEl = document.getElementById('lat');
+    const lngEl = document.getElementById('lng');
+    const accEl = document.getElementById('acc');
+    const tsEl = document.getElementById('ts');
+    const autoSend = document.getElementById('autoSend');
+    const sendNow = document.getElementById('sendNow');
+    const useridEl = document.getElementById('userid');
+    const clearMapBtn = document.getElementById('clearMap');
+
+    // Leaflet map setup
+    const map = L.map('map', { zoomControl: true }).setView([20.5937,78.9629], 5); // India center as default
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let marker = null;
+    let accuracyCircle = null;
+    let watchId = null;
+
+    function setStatus(tracking) {
+      if (tracking) {
+        statusDot.classList.remove('off'); statusDot.classList.add('ok');
+        statusText.textContent = 'Tracking (watchPosition active)';
+      } else {
+        statusDot.classList.remove('ok'); statusDot.classList.add('off');
+        statusText.textContent = 'Not tracking';
+      }
+    }
+
+    function updateUI(position) {
+      const lat = position.coords.latitude.toFixed(6);
+      const lng = position.coords.longitude.toFixed(6);
+      const acc = position.coords.accuracy.toFixed(1) + ' m';
+      const ts = new Date(position.timestamp).toLocaleString();
+
+      latEl.textContent = lat;
+      lngEl.textContent = lng;
+      accEl.textContent = acc;
+      tsEl.textContent = ts;
+
+      // update marker
+      const latlng = [position.coords.latitude, position.coords.longitude];
+      if (!marker) {
+        marker = L.marker(latlng).addTo(map);
+      } else {
+        marker.setLatLng(latlng);
+      }
+
+      // accuracy circle
+      if (!accuracyCircle) {
+        accuracyCircle = L.circle(latlng, { radius: position.coords.accuracy }).addTo(map);
+      } else {
+        accuracyCircle.setLatLng(latlng);
+        accuracyCircle.setRadius(position.coords.accuracy);
+      }
+
+      // center map on first fix or when zoomed out
+      if (map.getZoom() < 13) map.setView(latlng, 15);
+
+      if (autoSend.checked) {
+        sendLocationToServer(position).catch(err => {
+          console.warn('Auto-send failed:', err);
+        });
+      }
+    }
+
+    function handleError(err) {
+      console.error('Geolocation error', err);
+      statusText.textContent = 'Error: ' + (err.message || err.code);
+    }
+
+    // Start watchPosition with high accuracy
+    startBtn.addEventListener('click', () => {
+      if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser.');
+        return;
+      }
+      if (watchId !== null) {
+        return; // already tracking
+      }
+      const opts = {
+        enableHighAccuracy: true,
+        maximumAge: 1000,   // accept cached position not older than 1s
+        timeout: 10000
+      };
+      watchId = navigator.geolocation.watchPosition(position => {
+        setStatus(true);
+        updateUI(position);
+      }, handleError, opts);
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      setStatus(true);
+    });
+
+    // Stop tracking
+    stopBtn.addEventListener('click', () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      setStatus(false);
+    });
+
+    // Send current shown location to server
+    sendNow.addEventListener('click', async () => {
+      // try to obtain a single position if none is available
+      if (!navigator.geolocation) {
+        alert('Geolocation not supported');
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(async (position) => {
+        try {
+          const res = await sendLocationToServer(position);
+          alert('Sent — server response: ' + (res && res.status ? res.status : 'OK'));
+        } catch (err) {
+          alert('Send failed: ' + err.message);
+        }
+      }, (err) => {
+        alert('Unable to get position: ' + err.message);
+      }, { enableHighAccuracy: true, timeout: 10000 });
+    });
+
+    // Clear marker from map
+    clearMapBtn.addEventListener('click', () => {
+      if (marker) { map.removeLayer(marker); marker = null; }
+      if (accuracyCircle) { map.removeLayer(accuracyCircle); accuracyCircle = null; }
+      latEl.textContent = '—';
+      lngEl.textContent = '—';
+      accEl.textContent = '—';
+      tsEl.textContent = '—';
+    });
+
+    // Example: send to POST /location (modify to your real endpoint)
+    async function sendLocationToServer(position) {
+      // Build payload
+      const payload = {
+        clientId: (useridEl.value || null),
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+        altitude: position.coords.altitude ?? null,
+        altitudeAccuracy: position.coords.altitudeAccuracy ?? null,
+        heading: position.coords.heading ?? null,
+        speed: position.coords.speed ?? null,
+        timestamp: new Date(position.timestamp).toISOString()
+      };
+
+      // IMPORTANT: adapt the URL to your server. This example assumes '/location' accepts JSON POST.
+      const url = '/location';
+
+      // You can add authentication headers here if your API requires it.
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      // If your server returns JSON:
+      let data = null;
+      try { data = await response.json(); } catch (e) { /* ignore parse errors */ }
+      return { status: response.status, ok: response.ok, data };
+    }
+
+    // initialize small status
+    setStatus(false);
+
+    // Helpful: Warn user if page is insecure
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+      console.warn('Geolocation needs HTTPS. Your page is not secure; geolocation may be blocked.');
+    }
+  </script>
+</body>
+</html>
+     
